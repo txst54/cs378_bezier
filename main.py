@@ -21,13 +21,12 @@ def gen_train_data():
     for i in tqdm.tqdm(range(100)):
         num_points = NUM_POINTS  # Number of points, Dimension of points
         p_dim = P_DIM
-        x = [[random.random(), random.random()] for j in range(num_points)]
-        num_points = num_points - 1
-        bezier = bezier.eval_bezier(np.linspace(0, 1, IMSIZE), x)
+        x = [[random.random for _ in range(p_dim)] for __ in range(num_points)]
+        spline = bezier.eval_bezier(np.linspace(0, 1, IMSIZE), x)
         canvas = np.zeros((IMSIZE, IMSIZE))
-        for j in range(len(bezier)):
-            y = min(int(bezier[j][1] * IMSIZE), IMSIZE - 1)
-            x = min(int(bezier[j][0] * IMSIZE), IMSIZE - 1)
+        for j in range(len(spline)):
+            y = min(int(spline[j][1] * IMSIZE), IMSIZE - 1)
+            x = min(int(spline[j][0] * IMSIZE), IMSIZE - 1)
             canvas[y][x] = 1
         debug.append(bezier)
         train_x.append(canvas)
