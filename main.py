@@ -20,11 +20,12 @@ IMSIZE = 12  # nxn image
 INPUT_DIM = (IMSIZE * IMSIZE)
 OUTPUT_DIM = (IMSIZE * IMSIZE)
 PARAM_SIZE = INPUT_DIM * OUTPUT_DIM + OUTPUT_DIM
-POP_SIZE = 128
+POP_SIZE = 4
 INIT_STDEV = 0.2
 NUM_SAMPLES = 100
 TOTAL_GENS = 300
-NUM_CORES = 15
+NUM_CORES = 10
+
 
 class BezierSolver:
     def __init__(self):
@@ -59,7 +60,7 @@ class BezierSolver:
         return coords
 
     def mse(self, pred, y):
-        return ((pred - y)**2).mean()
+        return ((pred - y) ** 2).mean()
 
     def mlp_forward(self, params, obs):
         x = obs
@@ -81,6 +82,7 @@ class BezierSolver:
         self.es.tell(self.params, loss.tolist())
 
     def eval_params(self, params):
+        print("Evaluating...")
         loss = 0
         for (x, y) in zip(self.train_x, self.train_y):
             logits = self.mlp_forward(params, x)
@@ -91,6 +93,7 @@ class BezierSolver:
 
     def train(self):
         num_gens = TOTAL_GENS
+        print("Training...")
         for gen in range(num_gens):
             with Pool(NUM_CORES) as pool:
                 self.ask()
@@ -104,5 +107,6 @@ class BezierSolver:
             gc.collect()
 
 
-
-
+if __name__ == '__main__':
+    solver = BezierSolver()
+    solver.train()
