@@ -27,6 +27,7 @@ def eval_bezier(t, control_points):
     eval_points = np.zeros((len(t), p_dim))
 
     for i in range(num_points + 1):
-        eval_points += np.outer(eval_bernstein(i, num_points, t), control_points[i])
+        polynomial = eval_bernstein(i, num_points, t)
+        eval_points += np.outer(polynomial, control_points[i])
 
     return eval_points
