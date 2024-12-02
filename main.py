@@ -14,6 +14,7 @@ import gc
 
 import psutil
 import os
+import contextlib
 
 
 def memory_usage():
@@ -29,38 +30,60 @@ IMSIZE = 12  # nxn image
 INPUT_DIM = (IMSIZE * IMSIZE)
 OUTPUT_DIM = (IMSIZE * IMSIZE)
 PARAM_SIZE = INPUT_DIM * OUTPUT_DIM + OUTPUT_DIM
-POP_SIZE = 4
+POP_SIZE = 6144
+PARAM_SHAPE = (POP_SIZE, PARAM_SIZE)
 INIT_STDEV = 0.2
-NUM_SAMPLES = 100
+NUM_SAMPLES = 32
 TOTAL_GENS = 300
-NUM_CORES = 1
+NUM_CORES = 32
+
+
+def create_shm(params):
+    """Create shared memory"""
+    try:
+        shm = shared_memory.SharedMemory(create=True, size=params.nbytes)
+        np.ndarray(params.shape, dtype=params.dtype, buffer=shm.buf)[:] = params
+        return shm.name
+    finally:
+        if 'shm' in locals():
+            shm.close()
 
 
 class BezierSolver:
     def __init__(self, params=None):
-        print(f'Current memory usage: {memory_usage()}')
+        # printf(f'Current memory usage: {memory_usage()}')
         if params is None:
-            params = np.zeros((POP_SIZE, PARAM_SIZE), dtype=np.float32)
-        self.params_shm = shared_memory.SharedMemory(create=True, size=params.nbytes)
-        self.set_params(params)
-        print(f'Current memory usage: {memory_usage()}')
-        self.es = cma.CMAEvolutionStrategy(self.params[0],
+            params = np.zeros(PARAM_SHAPE, dtype=np.float32)
+        self.params_shm_name = create_shm(params)
+        # printf(f'Current memory usage: {memory_usage()}')
+        self.es = cma.CMAEvolutionStrategy(params[0],
                                            INIT_STDEV,
                                            {'popsize': POP_SIZE})
-        print(f'Current memory usage: {memory_usage()}')
-        train_x, train_y = self.gen_train_data()
-        self.train_x_shm = shared_memory.SharedMemory(create=True, size=train_x.nbytes)
-        self.train_y_shm = shared_memory.SharedMemory(create=True, size=train_y.nbytes)
-        self.train_x_shape = train_x.shape
-        self.train_y_shape = train_y.shape
-        print(f'Current memory usage: {memory_usage()}')
+        # printf(f'Current memory usage: {memory_usage()}')
 
-        # Copy training data to shared memory
-        np.ndarray(self.train_x_shape, dtype=train_x.dtype, buffer=self.train_x_shm.buf)[:] = train_x
-        np.ndarray(self.train_y_shape, dtype=train_y.dtype, buffer=self.train_y_shm.buf)[:] = train_y
+    @staticmethod
+    @contextlib.contextmanager
+    def get_params(shm_name, shape, dtype):
+        """Safely retrieve parameters from shared memory."""
+        try:
+            params_shm = shared_memory.SharedMemory(name=shm_name)
+            params = np.ndarray(shape, dtype=dtype, buffer=params_shm.buf)
 
-    def set_params(self, val):
-        np.ndarray((POP_SIZE, PARAM_SIZE), dtype=np.float32, buffer=self.params_shm.buf)[:] = val
+            if params is None or params.size == 0:
+                raise ValueError("Params are empty or not properly initialized.")
+
+            yield params
+        except Exception as e:
+            print(f"Error retrieving params: {e}")
+            return None
+        finally:
+            if 'params_shm' in locals():
+                params_shm.close()
+
+    @staticmethod
+    def set_params(params_shm_name, new_params):
+        with BezierSolver.get_params(params_shm_name, PARAM_SHAPE, np.float32) as params:
+            params[:] = new_params
 
     @staticmethod
     def gen_train_data():
@@ -107,28 +130,24 @@ class BezierSolver:
         return x
 
     @staticmethod
-    def eval_params(params_chunk, train_x_shm_name, train_y_shm_name, train_x_shape, train_y_shape):
-        # Attach to shared memory
-        train_x_shm = shared_memory.SharedMemory(name=train_x_shm_name)
-        train_y_shm = shared_memory.SharedMemory(name=train_y_shm_name)
+    def eval_params(shm_name, shape, dtype, start_idx, end_idx):
+        with BezierSolver.get_params(shm_name, shape=shape, dtype=dtype) as params:
+            if params is None:
+                raise ValueError("Failed to retrieve params from shared memory.")
+            params_chunk = params[start_idx:end_idx]
+            train_x, train_y = BezierSolver.gen_train_data()
+            losses = []
 
-        # Now use np.ndarray to access the shared memory block
-        train_x = np.ndarray(train_x_shape, dtype=np.float32, buffer=train_x_shm.buf)
-        train_y = np.ndarray(train_y_shape, dtype=np.float32, buffer=train_y_shm.buf)
-        # Initialize an array to store losses for this chunk
-        losses = []
-
-        # Evaluate each parameter set in the chunk
-        for params in params_chunk:
-            loss = 0
-            print(f'Current memory usage: {memory_usage()}')
-            for x, y in zip(train_x, train_y):  # Iterate over training samples
-                logits = BezierSolver.mlp_forward(params, x)
-                coords = BezierSolver.logits_to_coords(logits)
-                error = BezierSolver.mse(coords, y)
-                loss += error
-            losses.append(loss)  # Append the total loss for this parameter set
-        return losses
+            for params in params_chunk:
+                loss = 0
+                # printf(f'Current memory usage: {memory_usage()}')
+                for x, y in zip(train_x, train_y):
+                    logits = BezierSolver.mlp_forward(params, x)
+                    coords = BezierSolver.logits_to_coords(logits)
+                    error = BezierSolver.mse(coords, y)
+                    loss += error
+                losses.append((loss / NUM_SAMPLES) * IMSIZE)
+            return losses
 
     @staticmethod
     def plot_heatmap(x, y, logits_heatmap, pred_y):
@@ -146,59 +165,61 @@ class BezierSolver:
         plt.show()
 
     def ask(self):
-        self.params = np.array(self.es.ask(), dtype=np.float32)
-        return self.params
+        params = np.array(self.es.ask(), dtype=np.float32)
+        BezierSolver.set_params(self.params_shm_name, params)
+        return params
 
-    def tell(self, loss):
-        loss = np.array(loss, dtype=np.float32)
-        self.es.tell(self.params, loss.tolist())
+    def tell(self, loss, params):
+        params = np.array(params)
+        self.es.tell(params, loss.tolist())
 
     def test(self, champion_idx):
         train_x, train_y = BezierSolver.gen_train_data()
         num_iters = 10
-        for i in range(min(num_iters, len(train_x))):
-            x = np.reshape(train_x[i], (IMSIZE, IMSIZE))
-            y = np.transpose(np.reshape(train_y[i], (NUM_POINTS, P_DIM))) * IMSIZE
-            logits = BezierSolver.mlp_forward(self.params[champion_idx], train_x[i])
-            logits = scipy.special.softmax(logits)
-            coords = BezierSolver.logits_to_coords(logits)
-            pred_y = np.transpose(np.reshape(coords, (NUM_POINTS, P_DIM))) * IMSIZE
-            logits_heatmap = np.reshape(logits, (IMSIZE, IMSIZE)).transpose()
-            BezierSolver.plot_heatmap(x, y, logits_heatmap, pred_y)
+        with BezierSolver.get_params(self.params_shm_name, shape=PARAM_SHAPE, dtype=np.float32) as params:
+            for i in range(min(num_iters, len(train_x))):
+                x = np.reshape(train_x[i], (IMSIZE, IMSIZE))
+                y = np.transpose(np.reshape(train_y[i], (NUM_POINTS, P_DIM))) * IMSIZE
+                logits = BezierSolver.mlp_forward(params[champion_idx], train_x[i])
+                logits = scipy.special.softmax(logits)
+                coords = BezierSolver.logits_to_coords(logits)
+                pred_y = np.transpose(np.reshape(coords, (NUM_POINTS, P_DIM))) * IMSIZE
+                logits_heatmap = np.reshape(logits, (IMSIZE, IMSIZE)).transpose()
+                BezierSolver.plot_heatmap(x, y, logits_heatmap, pred_y)
 
     def train(self):
-        num_gens = TOTAL_GENS
-        print("Training...")
-        for gen in range(num_gens):
-            train_x, train_y = self.gen_train_data()
-            np.ndarray(self.train_x_shape, dtype=train_x.dtype, buffer=self.train_x_shm.buf)[:] = train_x
-            np.ndarray(self.train_y_shape, dtype=train_y.dtype, buffer=self.train_y_shm.buf)[:] = train_y
-            print(f'Current memory usage: {memory_usage()}')
-            self.ask()
-            chunk_size = POP_SIZE // NUM_CORES
-            with Pool(NUM_CORES) as pool:
-                print(f'Current memory usage: {memory_usage()}')
-                args = [(self.params[i:i + chunk_size],
-                         self.train_x_shm.name,
-                         self.train_y_shm.name,
-                         self.train_x_shape,
-                         self.train_y_shape) for i in range(0, POP_SIZE, chunk_size)]
-                worker_loss = np.array(pool.starmap(BezierSolver.eval_params, args), dtype=np.float32)
-                loss = worker_loss.ravel()
-                print(f'Current memory usage: {memory_usage()}')
-            self.tell(loss)
-            print(f'gen={gen}, '
-                  f'best_loss={np.min(loss)}, '
-                  f'avg_loss={np.mean(loss)}, '
-                  f'champion_idx={np.argmin(np.array(loss))}'
-                  )
-            if gen % 50 == 0:
-                np.save(f'./params_{gen}.npy', self.params)
-            del loss
-            gc.collect()
+        try:
+            num_gens = TOTAL_GENS
+            print("Training...")
+            for gen in range(num_gens):
+                # printf(f'Current memory usage: {memory_usage()}')
+                params = self.ask()
+                chunk_size = POP_SIZE // NUM_CORES
+                with Pool(NUM_CORES) as pool:
+                    # printf(f'Current memory usage: {memory_usage()}')
+                    args = [(self.params_shm_name, PARAM_SHAPE, np.float32, i, i + chunk_size)
+                            for i in range(0, POP_SIZE, chunk_size)]
+                    worker_loss = np.array(pool.starmap(BezierSolver.eval_params, args), dtype=np.float32)
+                    loss = worker_loss.ravel()
+                    # printf(f'Current memory usage: {memory_usage()}')
+                self.tell(loss, params)
+                print(f'gen={gen}, '
+                      f'best_loss={np.min(loss)}, '
+                      f'avg_loss={np.mean(loss)}, '
+                      f'champion_idx={np.argmin(np.array(loss))}'
+                      )
+                if gen % 10 == 0:
+                    np.save(f'./params_{gen}.npy', params)
+                del loss
+                gc.collect()
+        except KeyboardInterrupt:
+            params_shm = shared_memory.SharedMemory(name=self.params_shm_name)
+            params_shm.close()
+            params_shm.unlink()
 
 
 if __name__ == '__main__':
+    multiprocessing.set_start_method('spawn')
     # prev_params = np.load("./params_50.npy")
     # print(prev_params.shape)
     solver = BezierSolver()
