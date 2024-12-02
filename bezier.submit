@@ -1,0 +1,13 @@
+universe = vanilla
+executable = /bin/bash
+arguments = "-c 'mkdir -p condaenv && tar -xzf condaenv_linux-x86_64.tar.gz -C condaenv && tar -xzf submission.tar.gz && ./condaenv/bin/python main.py && tar -czf output_files.tar.gz params_*.npy'"
+transfer_input_files = condaenv_linux-x86_64.tar.gz, submission.tar.gz
+transfer_output_files = output_files.tar.gz, output_dir/
+should_transfer_files = YES
+when_to_transfer_output = ON_EXIT
+log = condor.log
+output = job.out
+error = job.err
+request_cpus = 8
+request_memory = 4GB
+queue
