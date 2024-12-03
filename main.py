@@ -1,4 +1,6 @@
+import logging
 import multiprocessing
+import sys
 import warnings
 
 import numpy as np
@@ -31,17 +33,17 @@ IMSIZE = 12  # nxn image
 INPUT_DIM = (IMSIZE * IMSIZE)
 OUTPUT_DIM = (IMSIZE * IMSIZE)
 PARAM_SIZE = INPUT_DIM * OUTPUT_DIM + OUTPUT_DIM
-POP_SIZE = 6144
+POP_SIZE = 128
 INIT_STDEV = 0.2
 NUM_SAMPLES = 100
 TOTAL_GENS = 300
-TOTAL_TOURNAMENTS = 300
-NUM_CORES = 64
+TOTAL_TOURNAMENTS = 1000
+NUM_CORES = 16
 
 """PREDEFINED MACROS"""
 PARAM_SHAPE = (POP_SIZE, PARAM_SIZE)
 TRAIN_X_SHAPE = (NUM_SAMPLES, IMSIZE * IMSIZE)
-TRAIN_Y_SHAPE = (NUM_SAMPLES, P_DIM * NUM_POINTS)
+TRAIN_Y_SHAPE = (NUM_SAMPLES, NUM_POINTS, P_DIM)
 
 
 def create_shm(params):
@@ -85,6 +87,12 @@ def clean_shm(shm_name):
     shm.unlink()
 
 
+def init_worker():
+    warnings.filterwarnings("ignore", message=".*Falling back to cpu.*")
+    sys.stdout = open(os.devnull, 'w')
+    sys.stderr = open(os.devnull, 'w')
+
+
 class BezierSolver:
     def __init__(self, params=None, mode='es'):
         # printf(f'Current memory usage: {memory_usage()}')
@@ -123,7 +131,7 @@ class BezierSolver:
                 canvas[y][x] = 1
             # debug.append(bezier)
             train_x[i] = np.ravel(np.array(canvas))
-            train_y[i] = np.ravel(np.array(control_points))
+            train_y[i] = np.array(control_points)
         return train_x, train_y
 
     @staticmethod
@@ -131,12 +139,30 @@ class BezierSolver:
         # Flatten the array and find the indices of the 3 highest values
         flattened_indices = np.argpartition(logits, -3)[-3:]
         # Convert the flattened indices back to 2D coordinates
-        coords = np.ravel(np.array(np.unravel_index(flattened_indices, (IMSIZE, IMSIZE))).T) / IMSIZE
+        coords = np.array(np.unravel_index(flattened_indices, (IMSIZE, IMSIZE))).T / IMSIZE
         return coords
 
     @staticmethod
     def mse(pred, y):
-        return ((pred - y) ** 2).mean()
+        p_idxes = [(0, 1, 2), (1, 2, 0), (2, 0, 1), (1, 0, 2), (0, 2, 1), (2, 1, 0)]
+        min_mse = float('inf')
+        for p_idx in p_idxes:
+            p_pred = pred[p_idx, :]
+            min_mse = min(min_mse, ((p_pred - y) ** 2).mean())
+        return min_mse
+
+    @staticmethod
+    def mse_and_perm(pred, y):
+        p_idxes = [(0, 1, 2), (1, 2, 0), (2, 0, 1), (1, 0, 2), (0, 2, 1), (2, 1, 0)]
+        min_mse = float('inf')
+        best_perm = None
+        for p_idx in p_idxes:
+            p_pred = pred[p_idx, :]
+            new_mse = ((p_pred - y) ** 2).mean()
+            if new_mse < min_mse:
+                min_mse = new_mse
+                best_perm = p_idx
+        return min_mse, pred[best_perm, :]
 
     @staticmethod
     def mlp_forward(params, obs):
@@ -168,7 +194,7 @@ class BezierSolver:
                     coords = BezierSolver.logits_to_coords(logits)
                     error = BezierSolver.mse(coords, y)
                     loss += error
-                losses.append((loss / NUM_SAMPLES) * IMSIZE)
+                losses.append((loss / NUM_SAMPLES) * IMSIZE * IMSIZE)
             return losses
 
     @staticmethod
@@ -199,18 +225,29 @@ class BezierSolver:
         self.es.tell(params, loss.tolist())
 
     def test(self, champion_idx):
-        train_x, train_y = BezierSolver.gen_train_data()
-        num_iters = 10
-        with get_shm(self.params_shm_name, shape=PARAM_SHAPE, dtype=np.float32) as params:
-            for i in range(min(num_iters, len(train_x))):
-                x = np.reshape(train_x[i], (IMSIZE, IMSIZE))
-                y = np.transpose(np.reshape(train_y[i], (NUM_POINTS, P_DIM))) * IMSIZE
-                logits = BezierSolver.mlp_forward(params[champion_idx], train_x[i])
-                logits = scipy.special.softmax(logits)
-                coords = BezierSolver.logits_to_coords(logits)
-                pred_y = np.transpose(np.reshape(coords, (NUM_POINTS, P_DIM))) * IMSIZE
-                logits_heatmap = np.reshape(logits, (IMSIZE, IMSIZE)).transpose()
-                BezierSolver.plot_heatmap(x, y, logits_heatmap, pred_y)
+        try:
+            train_x, train_y = BezierSolver.gen_train_data()
+            num_iters = 10
+            with get_shm(self.params_shm_name, shape=PARAM_SHAPE, dtype=np.float32) as params:
+                for i in range(min(num_iters, len(train_x))):
+                    x = np.reshape(train_x[i], (IMSIZE, IMSIZE))
+                    y = np.transpose(train_y[i]) * IMSIZE
+                    logits = BezierSolver.mlp_forward(params[champion_idx], train_x[i])
+                    logits = scipy.special.softmax(logits)
+                    coords = BezierSolver.logits_to_coords(logits)
+                    mse, fixed_coords = self.mse_and_perm(coords, train_y[i])
+                    print(f'MSE: {mse * IMSIZE * IMSIZE}')
+                    pred_y = np.transpose(fixed_coords) * IMSIZE
+                    logits_heatmap = np.reshape(logits, (IMSIZE, IMSIZE)).transpose()
+                    BezierSolver.plot_heatmap(x, y, logits_heatmap, pred_y)
+        except KeyboardInterrupt:
+            clean_shm(self.params_shm_name)
+            clean_shm(self.train_x_shm_name)
+            clean_shm(self.train_y_shm_name)
+        finally:
+            clean_shm(self.params_shm_name)
+            clean_shm(self.train_x_shm_name)
+            clean_shm(self.train_y_shm_name)
 
     def train(self):
         if self.mode == 'es':
@@ -249,18 +286,19 @@ class BezierSolver:
             params_shm.unlink()
 
     def run_tournament(self, loss, win_streak):
-        with get_shm(self.params_shm_name, shape=PARAM_SHAPE, dtype=np.float32) as params:
+        with (get_shm(self.params_shm_name, shape=PARAM_SHAPE, dtype=np.float32) as params):
             idxes = np.array(list(range(POP_SIZE)))
             np.random.shuffle(idxes)
             pairs = np.reshape(idxes, (POP_SIZE // 2, 2))
             for pair in pairs:
                 idx_l, idx_w = pair
+                noise = np.random.normal(size=PARAM_SIZE).astype(np.float32) * 0.1
                 if loss[idx_l] == loss[idx_w]:
-                    params[idx_l] += np.random.normal(size=PARAM_SIZE).astype(np.float32) * 0.1
+                    params[idx_l] = params[idx_w] + noise
                     continue
                 if loss[idx_l] < loss[idx_w]:
                     idx_l, idx_w = idx_w, idx_l
-                params[idx_l] = params[idx_w] * np.random.normal(size=PARAM_SIZE).astype(np.float32) * 0.1
+                params[idx_l] = params[idx_w] + noise
                 win_streak[idx_l] = win_streak[idx_w]
                 win_streak[idx_w] += 1
         return win_streak
@@ -277,7 +315,7 @@ class BezierSolver:
                     train_y[:] = ty
                 # printf(f'Current memory usage: {memory_usage()}')
                 chunk_size = POP_SIZE // NUM_CORES
-                with Pool(NUM_CORES) as pool:
+                with Pool(NUM_CORES, initializer=init_worker) as pool:
                     # printf(f'Current memory usage: {memory_usage()}')
                     args = [(self.params_shm_name, self.train_x_shm_name, self.train_y_shm_name, i, i + chunk_size)
                             for i in range(0, POP_SIZE, chunk_size)]
@@ -302,13 +340,18 @@ class BezierSolver:
             clean_shm(self.params_shm_name)
             clean_shm(self.train_x_shm_name)
             clean_shm(self.train_y_shm_name)
+        finally:
+            clean_shm(self.params_shm_name)
+            clean_shm(self.train_x_shm_name)
+            clean_shm(self.train_y_shm_name)
 
 
 if __name__ == '__main__':
     multiprocessing.set_start_method('spawn')
     warnings.filterwarnings("ignore", message=".*Falling back to cpu.*")
-    # prev_params = np.load("./params_50.npy")
+    prev_params = np.load("./params-ga_300.npy")
+    # print(prev_params)
     # print(prev_params.shape)
-    solver = BezierSolver(mode='ga')
-    # solver.test(0)
+    solver = BezierSolver(params=prev_params, mode='ga')
+    # solver.test(3)
     solver.train()
