@@ -29,6 +29,7 @@ def plot_best_loss(file_path):
     plt.show()
 
 
-# Example usage
-file_path = "data.txt"  # Replace with the path to your document
-plot_best_loss(file_path)
+if __name__ == "__main__":
+    # Example usage
+    file_path = "data.txt"  # Replace with the path to your document
+    plot_best_loss(file_path)

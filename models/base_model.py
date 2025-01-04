@@ -9,3 +9,7 @@ class BaseModel(ABC):
     @abstractmethod
     def forward(self, params, obs):
         pass
+
+    @abstractmethod
+    def get_num_params(self):
+        pass
