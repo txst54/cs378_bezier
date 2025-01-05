@@ -44,6 +44,7 @@ def nn_control(policy, params, seed, render=True, break_in_middle=False):
             policy.mlp_params_hist = param_hist + policy.mlp_params_hist
         action = policy(params, obs)
         obs, reward, done, _, info = env.step(action)
+        policy.update(params, reward)
         total_reward += reward
         step += 1
         if render:

@@ -40,6 +40,7 @@ class SharedMemoryManager:
             yield buf
         except Exception as e:
             print(f"Error retrieving params for {shm_name} of shape {shape}: {e}")
+            raise Exception(f"Error retrieving params for {shm_name} of shape {shape}: {e}")
             return None
         finally:
             if 'shm' in locals() and shm is not None:

@@ -21,6 +21,8 @@ class MetaCartPoleControl(object):
         self.num_params = 0
         self.hebbian_w_sizes = []
         self.num_hebbian_params = 0
+        self.pre_synaptic_activations = []
+        self.post_synaptic_activations = []
 
         dim_in = input_dim
         for hidden_dim in hidden_dims:
@@ -72,15 +74,30 @@ class MetaCartPoleControl(object):
         )
         x = obs
         ss = 0
-        h_ss = 0
+        self.pre_synaptic_activations = []
+        self.post_synaptic_activations = []
         for w_size, hebbian_w_size in zip(self.w_sizes, self.hebbian_w_sizes):
 
             # Pass data through the MLP layer
             ee = ss + np.prod(w_size)
             w = self.mlp_params[ss:ee].reshape(w_size)
             pre_synaptic_activation = x
+            self.pre_synaptic_activations.append(pre_synaptic_activation)
             x = np.tanh(np.einsum('i,ij->j', x, w))
             post_synaptic_activation = x
+            self.post_synaptic_activations.append(post_synaptic_activation)
+            ss = ee
+
+        assert ss == self.num_params
+        return 0 if x < 0 else 1
+
+    def update(self, hebbian_params, reward):
+        ss = 0
+        h_ss = 0
+        for w_size, hebbian_w_size, pre_synaptic_activation, post_synaptic_activation in \
+                zip(self.w_sizes, self.hebbian_w_sizes, self.pre_synaptic_activations, self.post_synaptic_activations):
+            ee = ss + np.prod(w_size)
+            w = self.mlp_params[ss:ee].reshape(w_size)
 
             # Apply the Hebbian learning rule
             # Your code here
@@ -91,10 +108,11 @@ class MetaCartPoleControl(object):
             hebbian_w = hebbian_w.reshape(hebbian_w_size)
             for i in range(w_size[0]):
                 for j in range(w_size[1]):
-                    w[i][j] += lr * (hebbian_w[0][i][j] * pre_synaptic_activation[i] * post_synaptic_activation[j] +
-                                     hebbian_w[1][i][j] * pre_synaptic_activation[i] +
-                                     hebbian_w[2][i][j] * post_synaptic_activation[j] +
-                                     hebbian_w[3][i][j])
+                    w[i][j] += (lr * reward *
+                                (hebbian_w[0][i][j] * pre_synaptic_activation[i] * post_synaptic_activation[j] +
+                                 hebbian_w[1][i][j] * pre_synaptic_activation[i] +
+                                 hebbian_w[2][i][j] * post_synaptic_activation[j] +
+                                 hebbian_w[3][i][j]))
             self.mlp_params[ss:ee] = w.flatten()
 
             ss = ee
@@ -103,5 +121,3 @@ class MetaCartPoleControl(object):
         assert ss == self.num_params
         assert h_ss == self.num_hebbian_params
         self.mlp_params_hist.append(self.mlp_params.copy())
-
-        return 0 if x < 0 else 1

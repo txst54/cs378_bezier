@@ -16,7 +16,7 @@ IMSIZE = 12  # nxn image
 
 INPUT_DIM = (IMSIZE * IMSIZE)
 OUTPUT_DIM = (IMSIZE * IMSIZE)
-POP_SIZE = 512
+POP_SIZE = 32
 INIT_STDEV = 0.2
 NUM_SAMPLES = 100
 TOTAL_GENS = 300
@@ -58,9 +58,9 @@ CNN_PARAMS = [
 if __name__ == '__main__':
     multiprocessing.set_start_method('spawn')
     warnings.filterwarnings("ignore", message=".*Falling back to cpu.*")
-    prev_params = np.load("./zoo/conv-sga/params-ga_40.npy")
+    # prev_params = np.load("./zoo/conv-sga/params-ga_40.npy")
     # print(prev_params)
-    print(prev_params.shape)
+    # print(prev_params.shape)
 
     # model = FeedForward(INPUT_DIM, OUTPUT_DIM)
     # loss_fn = HeatmapLoss(mode="stochastic", num_points=NUM_POINTS, imsize=IMSIZE)
@@ -75,13 +75,17 @@ if __name__ == '__main__':
                              pop_size=POP_SIZE,
                              total_tournaments=TOTAL_TOURNAMENTS,
                              num_cores=NUM_CORES,
-                             params=prev_params,
+                             params=None,
                              starting_param_idx=1)
     solver.train()
     # test_input = np.zeros((12, 12))
     # test_params = np.random.normal(size=(model.get_num_params())).astype(np.float32) * 0.5
-    # y = model.forward(test_params, test_input)
+    # mlp_param = test_params[:model.conv_size]
+    # hebbian_param = test_params[model.conv_size:]
+    # mlp_param = np.concatenate((mlp_param, np.random.randn(model.mlp_size) * 0.01), axis=0)
+    # # printf(f'Current memory usage: {memory_usage()}')
+    # logits, mlp_param = model.forward(mlp_param, test_input, hebbian_param)
     # print(model.get_num_params())
-    # print(y)
+    # print(logits)
     # print(loss_fn.loss(y, np.zeros((3, 2))))
     # solver.test(3, prev_params)

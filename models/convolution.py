@@ -62,6 +62,7 @@ class ConvolutionalNeuralNetwork(BaseModel):
         self.param_shapes = param_shapes
         self.pool_shape = pool_shape
         self.n_params = self.__calc_param_size__()
+        self.feed_forward_range = (0, 0)
 
     def __calc_param_size__(self):
         prev_channels = 1
@@ -74,7 +75,11 @@ class ConvolutionalNeuralNetwork(BaseModel):
             prev_channels = p_shape["filters"]
         w_size = prev_channels * self.output_dim
         b_size = self.output_dim
-        return sum(kernel_sizes) + sum(bias_sizes) + w_size + b_size
+        self.conv_size = sum(kernel_sizes) + sum(bias_sizes)
+        self.mlp_size = w_size + b_size
+        self.feed_forward_range = (self.conv_size, w_size + b_size)
+        self.hebbian_shape = (4, prev_channels, self.output_dim)
+        return self.conv_size + w_size + b_size
 
     def __extract_weights__(self, params):
         kernels, biases = [], []
@@ -92,18 +97,36 @@ class ConvolutionalNeuralNetwork(BaseModel):
         ee = ss + prev_channels * self.output_dim
         w_in = params[ss:ee].reshape(prev_channels, self.output_dim)
         bias = params[ee:ee + self.output_dim]
-        return kernels, biases, w_in, bias
+        return kernels, biases, w_in, bias, ss, ee
 
-    def forward(self, params, obs):
+    def forward(self, params, obs, hebbian_params=None):
         x = obs.reshape(1, self.input_dim, self.input_dim, 1)
-        kernels, biases, w_in, b = self.__extract_weights__(params)
+        kernels, biases, w_in, b, ss, ee = self.__extract_weights__(params)
         for kernel, bias, p_shape in zip(kernels, biases, self.param_shapes):
             x = conv2d(x, kernel, bias, stride=p_shape["stride"])
             x = jax.nn.relu(x)
         x = adaptive_avg_pool_2d(x, self.pool_shape)
         x = x.squeeze()
+        pre_synaptic_activation = x
         x = jax.nn.sigmoid(jnp.dot(w_in.T, x) + b)
-        return x
+        post_synaptic_activation = x
+        if hebbian_params is not None:
+            h_ss = 0
+            lr = hebbian_params[h_ss]
+            h_ss += 1
+            hebbian_w_size = self.hebbian_shape
+            h_ee = h_ss + jnp.prod(jnp.array(hebbian_w_size))
+            hebbian_w = hebbian_params[h_ss:h_ee]
+            hebbian_w = hebbian_w.reshape(hebbian_w_size)
+            for i in range(w_in.shape[0]):
+                for j in range(w_in.shape[1]):
+                    w_in[i][j] += (lr * (hebbian_w[0][i][j] * pre_synaptic_activation[i] * post_synaptic_activation[j] +
+                                 hebbian_w[1][i][j] * pre_synaptic_activation[i] +
+                                 hebbian_w[2][i][j] * post_synaptic_activation[j] +
+                                 hebbian_w[3][i][j]))
+            params[ss:ee] = w_in.flatten()
+        return x, params
 
     def get_num_params(self):
-        return self.n_params
+        # conv size + hebbian paramters + learning rate
+        return self.conv_size + self.hebbian_shape[0] * self.hebbian_shape[1] * self.hebbian_shape[2] + 1

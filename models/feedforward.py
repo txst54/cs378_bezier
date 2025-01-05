@@ -8,7 +8,7 @@ class FeedForward(BaseModel):
         self.output_dim = output_dim
         self.n_params = self.input_dim * self.output_dim + self.output_dim
 
-    def forward(self, params, obs):
+    def forward(self, params, obs, hebbian_params=None):
         x = obs
         ss = 0
         ee = self.input_dim * self.output_dim

@@ -34,47 +34,49 @@ def eval_hebbian_params(args):
     return np.mean(rewards)
 
 
-if __name__ == "__main__":
-    warnings.filterwarnings('ignore', category=DeprecationWarning)
-
+def random_policy():
     # Control cart with a random Hebbian policy
-    # images = nn_control(hebbian_model, rand_hebbian_params, seed)
-    # print('Control the cart with a random Hebbian policy')
-    # play_video(images)
+    images = nn_control(hebbian_model, rand_hebbian_params, seed)
+    print('Control the cart with a random Hebbian policy')
+    play_video(images)
 
+
+def train_hebbian():
     # Initialize the CMA-ES solver.
-    # algo = cma.CMAEvolutionStrategy(
-    #     x0=np.zeros(hebbian_model.num_hebbian_params),
-    #     sigma0=init_stdev,
-    #     inopts={
-    #         "popsize": pop_size,
-    #         "seed": seed,
-    #         "randn": np.random.randn,
-    #     }
-    # )
-    #
-    # # Optimization loop, we use multiprocessing to accelerate the rollouts.
-    # with Pool(num_worker) as p:
-    #     for i in range(num_gen * 5):
-    #         print("asking")
-    #         population = algo.ask()
-    #         rollout_seed = np.random.randint(0, 10000000)
-    #         print("starting evaluation of params")
-    #         scores = p.map(eval_hebbian_params,
-    #                        [x for x in zip(
-    #                            [np.array(population[k]) for k in range(pop_size)],
-    #                            [rollout_seed] * pop_size)])
-    #         print("telling")
-    #         algo.tell(population, [-x for x in scores])  # CMA-ES minimizes.
-    #         # if i % 10 == 0:
-    #         print(f'Gen={i + 1}, reward.max={np.max(scores)}')
-    #
-    # # Test and visualize the trained control policy.
-    # best_params = np.array(algo.result.xfavorite)
-    # np.save(f'./params-hebbian-best.npy', best_params)
-    # images = nn_control(hebbian_model, best_params, seed)
-    # play_video(images)
-    #
+    algo = cma.CMAEvolutionStrategy(
+        x0=np.zeros(hebbian_model.num_hebbian_params),
+        sigma0=init_stdev,
+        inopts={
+            "popsize": pop_size,
+            "seed": seed,
+            "randn": np.random.randn,
+        }
+    )
+
+    # Optimization loop, we use multiprocessing to accelerate the rollouts.
+    with Pool(num_worker) as p:
+        for i in range(num_gen * 5):
+            print("asking")
+            population = algo.ask()
+            rollout_seed = np.random.randint(0, 10000000)
+            print("starting evaluation of params")
+            scores = p.map(eval_hebbian_params,
+                           [x for x in zip(
+                               [np.array(population[k]) for k in range(pop_size)],
+                               [rollout_seed] * pop_size)])
+            print("telling")
+            algo.tell(population, [-x for x in scores])  # CMA-ES minimizes.
+            # if i % 10 == 0:
+            print(f'Gen={i + 1}, reward.max={np.max(scores)}')
+
+    # Test and visualize the trained control policy.
+    best_params = np.array(algo.result.xfavorite)
+    np.save(f'./params-hebbian-best.npy', best_params)
+    images = nn_control(hebbian_model, best_params, seed)
+    play_video(images)
+
+
+def visualize_hebbian():
     best_params = np.load("./params-hebbian-best.npy")
     images = nn_control(hebbian_model, best_params, seed, True, True)
     play_video(images)
@@ -85,3 +87,10 @@ if __name__ == "__main__":
     plt.imshow(mlp_params_hist)
     _ = plt.colorbar()
     plt.show()
+
+
+if __name__ == "__main__":
+    warnings.filterwarnings('ignore', category=DeprecationWarning)
+    # random_policy()
+    train_hebbian()
+    # visualize_hebbian()

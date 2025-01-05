@@ -42,9 +42,13 @@ class TrainerWorker:
 
             for param in params_chunk:
                 loss = 0
+                # replace feedforward params with intializer values
+                mlp_param = param[:self.model.conv_size]
+                hebbian_param = param[self.model.conv_size:]
+                mlp_param = np.concatenate((mlp_param, np.random.randn(self.model.mlp_size) * 0.01), axis=0)
                 # printf(f'Current memory usage: {memory_usage()}')
                 for x, y in zip(train_x, train_y):
-                    logits = self.model.forward(param, x)
+                    logits, mlp_param = self.model.forward(mlp_param, x, hebbian_param)
                     error = self.loss_fn.loss(logits, y)
                     loss += error
                 losses.append((loss / self.num_train_samples) * self.imsize * self.imsize)
@@ -104,7 +108,8 @@ class BaseTrainer(ABC):
         self.train_x_shm_name = self.shm_manager.create_shm(train_x)
         self.train_y_shm_name = self.shm_manager.create_shm(train_y)
         self.worker = TrainerWorker(self.model, self.loss_fn, self.imsize, self.num_points,
-                                    self.p_dim, self.num_train_samples, self.param_shape, self.shm_manager)
+                                    self.p_dim, self.num_train_samples, self.param_shape,
+                                    self.shm_manager)
         with (self.shm_manager.get_shm(self.train_x_shm_name, self.train_x_shape, np.float32) as train_x,
               self.shm_manager.get_shm(self.train_y_shm_name, self.train_y_shape, np.float32) as train_y):
             print(f"[Trainer] Can access shm in superclass")

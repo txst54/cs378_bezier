@@ -7,7 +7,7 @@ class BaseModel(ABC):
         pass
 
     @abstractmethod
-    def forward(self, params, obs):
+    def forward(self, params, obs, hebbian_params=None):
         pass
 
     @abstractmethod

@@ -1,6 +1,7 @@
 import gc
 import time
 from multiprocessing import Pool
+from typing import Tuple
 
 import numpy as np
 
@@ -25,7 +26,8 @@ class SimpleGATrainer(BaseTrainer):
                  params=None,
                  debug_mem=False
                  ):
-        super().__init__(model, loss, num_points, p_dim, imsize, num_train_samples, pop_size, num_cores)
+        super().__init__(model, loss, num_points, p_dim, imsize,
+                         num_train_samples, pop_size, num_cores)
         self.total_tournaments = total_tournaments
         if params is None:
             params = np.random.normal(size=self.param_shape).astype(np.float32) * 0.5
